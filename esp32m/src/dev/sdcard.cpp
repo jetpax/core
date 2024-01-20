@@ -1,50 +1,84 @@
-#include "esp32m/dev/sdcard.hpp"
-#include "esp32m/base.hpp"
-#include "esp32m/io/gpio.hpp"
+#include <driver/gpio.h>
 
-#include <esp_task_wdt.h>
+#include "esp32m/app.hpp"
+#include "esp32m/defs.hpp"
+#include "esp32m/dev/sdcard.hpp"
+#include "esp32m/integrations/ha/ha.hpp"
+
+
+// Full status to return through API
+  // SD CARD is inserted
+  // Status: available
+  // Name: SD32G
+  // Size:  29542 MB
+  // Free:  29541 MB
+
+  // Card type: SDHC/SDXC
+  // Max speed: 25000 kHz
+  // Capacity: 29554 MB
+  // CSD: ver=1, sector_size=512, capacity=60526592 read_bl_len=9
+  // SCR: sd_spec=2, bus_width=5
 
 namespace esp32m {
   namespace dev {
 
-    Sdcard::Sdcard(gpio_num_t pin) : _pin(gpio::pin(pin)) {
-      xTaskCreate([](void *self) { ((Sdcard *)self)->run(); }, "m/dbgbtn", 4096,
-                  this, tskIDLE_PRIORITY + 1, &_task);
+    void Sdcard::init() {
+      ESP_ERROR_CHECK_WITHOUT_ABORT(_pinCd->setDirection(true, false));
+      ESP_ERROR_CHECK_WITHOUT_ABORT(_pinCd->setPull(true, false));
+      refreshState();
     }
 
-    void Sdcard::run() {
-      _queue = xQueueCreate(16, sizeof(int32_t));
-      _pin->digital()->attach(_queue);
-      esp_task_wdt_add(NULL);
-      int32_t value;
-      for (;;) {
-        esp_task_wdt_reset();
-        if (xQueueReceive(_queue, &value, pdMS_TO_TICKS(1000))) {
-          _stamp = millis();
-          value = value / 1000;     // get time since last sdcard event in ms
-          if (value < 0) {          
-            // sdcard removed
-            value = -value;
-            logI("sdcard inserted for %.2fs", (float)value/1000);
-            _cmd = 1;
-          } else {                  
-            // sdcard inserted
-            logI("sdcard removed for %.2fs", (float)value/1000);
-             _cmd = 2;
-          }
-        }
-        if (_cmd ) {
-          logI("command %x issued", _cmd);
-          sdcard::Command ev(_cmd);
-          _cmd = 0;
-          ev.publish();
-        }
-      }
+    Sdcard::State Sdcard::refreshState() {
+      State state;
+      bool cdLevel = false;
+      _pinCd->read(cdLevel);
+      state = cdLevel ? Sdcard::State::Removed : Sdcard::State::Inserted;
+      setState(state);
+      return _state;
     }
 
+    const char *Sdcard::toString(State s) {
+      static const char *names[] = {"Removed", "Inserted"};
+      int si = (int)s;
+      if (si < 0 || si > 1)
+        si = 0;
+      return names[si];
+    }
 
-    Sdcard *useSdcard(gpio_num_t pin) {
-      return new Sdcard(pin);
+    const char *Sdcard::stateName() {
+      return toString(refreshState());
+    }
+
+    void Sdcard::setState(State state) {
+      if (state == _state)
+        return;
+      logI("state changed: %s -> %s", toString(_state), toString(state));
+      _state = state;
+      StaticJsonDocument<0> doc;
+      doc.set(serialized(toString(state)));
+      EventStateChanged::publish(this, doc);
+    }
+
+    DynamicJsonDocument *Sdcard::getState(const JsonVariantConst args) {
+      DynamicJsonDocument *doc = new DynamicJsonDocument(JSON_OBJECT_SIZE(1));
+      JsonObject info = doc->to<JsonObject>();
+      info["state"] = toString(refreshState());
+      return doc;
+    }
+
+    bool Sdcard::handleRequest(Request &req) {
+      if (AppObject::handleRequest(req))
+        return true;
+      return false;
+    }
+
+    Sdcard &Sdcard::instance() {
+      static Sdcard i;
+      return i;
+    }
+
+    Sdcard *useSdcard() {
+      return &Sdcard::instance();
     }
 
   }  // namespace dev

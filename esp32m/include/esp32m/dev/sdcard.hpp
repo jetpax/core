@@ -1,11 +1,11 @@
 #pragma once
 
-#include "esp32m/app.hpp"
-#include "esp32m/events.hpp"
-#include "esp32m/io/pins.hpp"
+#include <hal/gpio_types.h>
 
-#include <freertos/FreeRTOS.h>
-#include <freertos/queue.h>
+#include "esp32m/device.hpp"
+#include "esp32m/events/request.hpp"
+#include "esp32m/io/pins.hpp"
+#include <esp32m/io/gpio.hpp>
 
 namespace esp32m {
   namespace dev {
@@ -30,23 +30,38 @@ namespace esp32m {
       };
     }  // namespace sdcard
 
-    class Sdcard : public AppObject {
+    class Sdcard : public Device {
      public:
-      Sdcard(gpio_num_t pin);
+      enum class State { Removed = 0, Inserted = 1 };
       Sdcard(const Sdcard &) = delete;
+      
+      static Sdcard &instance();
       const char *name() const override {
         return "sdcard";
       }
+      static const char *toString(State s);
+      State state() {
+        return refreshState();
+      }
+      const char *stateName();
+
+    protected:
+      DynamicJsonDocument *getState(const JsonVariantConst args) override;
+      bool handleRequest(Request &req) override;
 
      private:
-      io::IPin *_pin;
-      TaskHandle_t _task = nullptr;
-      QueueHandle_t _queue = nullptr;
+      Sdcard() {
+        init();
+      }; 
+      void init();
+      io::pin::IDigital *_pinCd = gpio::pin(GPIO_NUM_3)->digital();
       unsigned long _stamp = 0;
-      int _cmd = 0;
-      void run();
+      State _state = State::Removed;
+      void setState(State state);
+      State refreshState();
     };
 
-    Sdcard *useSdcard(gpio_num_t pin = GPIO_NUM_0);
+    Sdcard *useSdcard();
+
   }  // namespace dev
 }  // namespace esp32m
