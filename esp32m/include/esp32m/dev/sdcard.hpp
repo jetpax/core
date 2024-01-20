@@ -9,6 +9,7 @@
 #include "esp_vfs_fat.h"
 #include "driver/sdmmc_host.h"
 #include "driver/sdmmc_defs.h"
+#include "sdmmc_cmd.h"
 
 namespace esp32m {
   namespace dev {
@@ -43,12 +44,15 @@ namespace esp32m {
         return "sdcard";
       }
       static const char *toString(State s);
-      sdmmc_host_t m_host;
-      sdmmc_slot_config_t m_slot;
-      esp_vfs_fat_sdmmc_mount_config_t m_mount;
-      sdmmc_card_t* m_card;
-      bool m_mounted;
-      bool m_unmounting;
+      esp_err_t mount();
+      esp_err_t unmount(bool h);
+      sdmmc_host_t _host;
+      sdmmc_slot_config_t _slotConfig;
+      esp_vfs_fat_sdmmc_mount_config_t _mountConfig;
+      sdmmc_card_t* _card;
+      bool _mounted;
+      bool _unmounting;
+      static constexpr const char _mount_point[] = "/sdcard";
 
     protected:
       DynamicJsonDocument *getState(const JsonVariantConst args) override;
@@ -61,8 +65,7 @@ namespace esp32m {
         Device::init(Flags::HasSensors);
       }; 
       esp_err_t init();
-      io::pin::IDigital *_pinCd = gpio::pin(GPIO_NUM_3)->digital();
-      unsigned long _stamp = 0;
+      io::pin::IDigital *_pinCd = gpio::pin((gpio_num_t)CONFIG_SDCARD_CD)->digital();
       State _state = State::Removed;
       void setState(State state);
     };
