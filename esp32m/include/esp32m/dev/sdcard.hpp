@@ -6,6 +6,9 @@
 #include "esp32m/events/request.hpp"
 #include "esp32m/io/pins.hpp"
 #include <esp32m/io/gpio.hpp>
+#include "esp_vfs_fat.h"
+#include "driver/sdmmc_host.h"
+#include "driver/sdmmc_defs.h"
 
 namespace esp32m {
   namespace dev {
@@ -44,16 +47,24 @@ namespace esp32m {
         return refreshState();
       }
       const char *stateName();
+      sdmmc_host_t m_host;
+      sdmmc_slot_config_t m_slot;
+      esp_vfs_fat_sdmmc_mount_config_t m_mount;
+      sdmmc_card_t* m_card;
+      bool m_mounted;
+      bool m_unmounting;
 
     protected:
       DynamicJsonDocument *getState(const JsonVariantConst args) override;
       bool handleRequest(Request &req) override;
+      bool pollSensors() override;
+      bool initSensors() override;
 
      private:
       Sdcard() {
-        init();
+        Device::init(Flags::HasSensors);
       }; 
-      void init();
+      esp_err_t init();
       io::pin::IDigital *_pinCd = gpio::pin(GPIO_NUM_3)->digital();
       unsigned long _stamp = 0;
       State _state = State::Removed;

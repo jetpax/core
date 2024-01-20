@@ -22,10 +22,11 @@
 namespace esp32m {
   namespace dev {
 
-    void Sdcard::init() {
+    esp_err_t Sdcard::init() {
       ESP_ERROR_CHECK_WITHOUT_ABORT(_pinCd->setDirection(true, false));
       ESP_ERROR_CHECK_WITHOUT_ABORT(_pinCd->setPull(true, false));
       refreshState();
+      return ESP_OK;
     }
 
     Sdcard::State Sdcard::refreshState() {
@@ -70,6 +71,15 @@ namespace esp32m {
       if (AppObject::handleRequest(req))
         return true;
       return false;
+    }
+
+    bool Sdcard::pollSensors() {
+      // logI("%s", stateName() );
+      return true;
+    }
+
+    bool Sdcard::initSensors() {
+      return Sdcard::init() == ESP_OK;
     }
 
     Sdcard &Sdcard::instance() {
