@@ -25,17 +25,7 @@ namespace esp32m {
     esp_err_t Sdcard::init() {
       ESP_ERROR_CHECK_WITHOUT_ABORT(_pinCd->setDirection(true, false));
       ESP_ERROR_CHECK_WITHOUT_ABORT(_pinCd->setPull(true, false));
-      refreshState();
       return ESP_OK;
-    }
-
-    Sdcard::State Sdcard::refreshState() {
-      State state;
-      bool cdLevel = false;
-      _pinCd->read(cdLevel);
-      state = cdLevel ? Sdcard::State::Removed : Sdcard::State::Inserted;
-      setState(state);
-      return _state;
     }
 
     const char *Sdcard::toString(State s) {
@@ -44,10 +34,6 @@ namespace esp32m {
       if (si < 0 || si > 1)
         si = 0;
       return names[si];
-    }
-
-    const char *Sdcard::stateName() {
-      return toString(refreshState());
     }
 
     void Sdcard::setState(State state) {
@@ -63,7 +49,7 @@ namespace esp32m {
     DynamicJsonDocument *Sdcard::getState(const JsonVariantConst args) {
       DynamicJsonDocument *doc = new DynamicJsonDocument(JSON_OBJECT_SIZE(1));
       JsonObject info = doc->to<JsonObject>();
-      info["state"] = toString(refreshState());
+      info["state"] = toString(_state);
       return doc;
     }
 
@@ -74,7 +60,11 @@ namespace esp32m {
     }
 
     bool Sdcard::pollSensors() {
-      // logI("%s", stateName() );
+      State state;
+      bool cdLevel = false;
+      _pinCd->read(cdLevel);
+      state = cdLevel ? Sdcard::State::Removed : Sdcard::State::Inserted;
+      setState(state);      
       return true;
     }
 

@@ -43,10 +43,6 @@ namespace esp32m {
         return "sdcard";
       }
       static const char *toString(State s);
-      State state() {
-        return refreshState();
-      }
-      const char *stateName();
       sdmmc_host_t m_host;
       sdmmc_slot_config_t m_slot;
       esp_vfs_fat_sdmmc_mount_config_t m_mount;
@@ -69,7 +65,6 @@ namespace esp32m {
       unsigned long _stamp = 0;
       State _state = State::Removed;
       void setState(State state);
-      State refreshState();
     };
 
     Sdcard *useSdcard();
