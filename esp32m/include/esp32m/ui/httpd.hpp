@@ -23,6 +23,7 @@ namespace esp32m {
       esp_err_t incomingReq(httpd_req_t *req);
       esp_err_t incomingWs(httpd_req_t *req);
       friend esp_err_t wsHandler(httpd_req_t *req);
+      friend esp_err_t wsShellHandler(httpd_req_t *req);
       friend esp_err_t httpHandler(httpd_req_t *req);
       friend void closeFn(httpd_handle_t hd, int sockfd);
     };

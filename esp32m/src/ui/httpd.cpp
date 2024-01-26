@@ -14,6 +14,7 @@
 namespace esp32m {
   namespace ui {
     const char *UriWs = "/ws";
+    const char *UriWsh = "/wsh";
     const char *UriRoot = "/";
     std::vector<Httpd *> _httpdServers;
 
@@ -78,10 +79,13 @@ namespace esp32m {
     bool uriMatcher(const char *reference_uri, const char *uri_to_match,
                     size_t match_upto) {
       bool isWsRequest = !strcmp(uri_to_match, UriWs);
+      bool isWshRequest = !strcmp(uri_to_match, UriWsh);
       if (!strcmp(reference_uri, UriWs))
         return isWsRequest;
+      if (!strcmp(reference_uri, UriWsh))
+        return isWshRequest;
       if (!strcmp(reference_uri, UriRoot))
-        return !isWsRequest;
+        return !(isWsRequest || isWshRequest);
       logw("no handler for: %s, match: %s, size: %d", reference_uri,
            uri_to_match, match_upto);
       return false;
@@ -101,6 +105,43 @@ namespace esp32m {
       return httpd->incomingWs(req);
     }
 
+    esp_err_t wsShellHandler(httpd_req_t *req) {
+      Httpd *httpd = nullptr;
+      for (Httpd *i : _httpdServers)
+        if (i->_server == req->handle) {
+          httpd = i;
+          break;
+        }
+      if (!httpd) {
+        logw("no user_ctx: %s %d", req->uri, req->handle);
+        return ESP_FAIL;
+      }
+      if (req->method == HTTP_GET) {
+        return ESP_OK;
+      }
+      httpd_ws_frame_t ws_pkt;
+      memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
+      ESP_CHECK_RETURN(httpd_ws_recv_frame(req, &ws_pkt, 0));
+
+      ws_pkt.payload = (uint8_t *)calloc(1, ws_pkt.len + 1);
+      if (!ws_pkt.payload)
+        return ESP_ERR_NO_MEM;
+
+      esp_err_t ret = ESP_ERROR_CHECK_WITHOUT_ABORT(
+          httpd_ws_recv_frame(req, &ws_pkt, ws_pkt.len));
+      if (ret == ESP_OK)
+        switch (ws_pkt.type) {
+          case HTTPD_WS_TYPE_TEXT:
+            logi("incomingWsShell %s", ws_pkt.payload);
+            break;
+          default:
+            logi("WS packet type %d was not handled", ws_pkt.type);
+            break;
+        }
+      free(ws_pkt.payload);
+      return ret;
+    }
+    
     esp_err_t httpHandler(httpd_req_t *req) {
       Httpd *httpd = (Httpd *)req->user_ctx;
       if (!httpd) {
@@ -150,6 +191,8 @@ namespace esp32m {
       Transport::init(ui);
       if (ESP_ERROR_CHECK_WITHOUT_ABORT(httpd_start(&_server, &_config)) ==
           ESP_OK) {
+
+        // Register WebSocket handler for the API
         httpd_uri_t uh = {.uri = UriWs,
                           .method = HTTP_GET,
                           .handler = wsHandler,
@@ -158,6 +201,13 @@ namespace esp32m {
                           .handle_ws_control_frames = false,
                           .supported_subprotocol = 0};
         ESP_ERROR_CHECK_WITHOUT_ABORT(httpd_register_uri_handler(_server, &uh));
+
+        // Register WebSocket handler for the shell
+        uh.uri = UriWsh;
+        uh.handler = wsShellHandler;
+        ESP_ERROR_CHECK_WITHOUT_ABORT(httpd_register_uri_handler(_server, &uh));
+
+        // Register HTTP handler for non-WebSocket requests
         uh.uri = UriRoot;
         uh.is_websocket = false;
         uh.handler = httpHandler;
