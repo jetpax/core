@@ -117,6 +117,9 @@ namespace esp32m {
         return ESP_FAIL;
       }
       if (req->method == HTTP_GET) {
+        uint8_t codes[10];
+        Shell::instance();
+        logi("%d:shell opened", httpd_req_to_sockfd(req));
         return ESP_OK;
       }
       httpd_ws_frame_t ws_pkt;
@@ -129,15 +132,17 @@ namespace esp32m {
 
       esp_err_t ret = ESP_ERROR_CHECK_WITHOUT_ABORT(
           httpd_ws_recv_frame(req, &ws_pkt, ws_pkt.len));
-      if (ret == ESP_OK)
+      if (ret == ESP_OK) {
+        // shell::Command ev(reinterpret_cast<char*>(ws_pkt.payload));
         switch (ws_pkt.type) {
           case HTTPD_WS_TYPE_TEXT:
-            logi("incomingWsShell %s", ws_pkt.payload);
+            event::Shell::publish(reinterpret_cast<char*>(ws_pkt.payload));
             break;
           default:
             logi("WS packet type %d was not handled", ws_pkt.type);
             break;
         }
+      }
       free(ws_pkt.payload);
       return ret;
     }
