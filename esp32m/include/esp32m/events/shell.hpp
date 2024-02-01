@@ -1,5 +1,6 @@
 #pragma once
 
+#include "esp_http_server.h"
 #include "esp32m/events.hpp"
 
 namespace esp32m {
@@ -17,9 +18,13 @@ namespace esp32m {
         return true;
       }
 
-      static void publish(std::string msg) {
-        Shell ev(msg);
+      static void publish(httpd_req_t *req, std::string msg) {
+        Shell ev(req, msg);
         ev.Event::publish();
+      }
+
+      httpd_req_t* req() const {
+        return _req;
       }
 
       std::string msg() const {
@@ -27,9 +32,10 @@ namespace esp32m {
       }
 
      private:
+      httpd_req_t* _req;
       std::string _msg;
       constexpr static const char *Type = "shell";
-      Shell(std::string msg) : Event(Type), _msg(msg){};
+      Shell(httpd_req_t *req, std::string msg) : Event(Type), _req(req),_msg(msg){};
     };
 
   }  // namespace event

@@ -2,7 +2,6 @@
 #include "esp32m/ui/transport.hpp"
 
 #include "esp32m/events/shell.hpp"
-#include "esp32m/debug/shell.hpp"
 #include "esp32m/events.hpp"
 
 namespace esp32m {
@@ -30,6 +29,5 @@ namespace esp32m {
       friend esp_err_t httpHandler(httpd_req_t *req);
       friend void closeFn(httpd_handle_t hd, int sockfd);
     };
-
   }  // namespace ui
 }  // namespace esp32m
