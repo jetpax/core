@@ -16,7 +16,6 @@ namespace esp32m {
     
     const char *UriWs = "/ws";
     const char *UriRoot = "/";
-    const char *UriMainJS = "/main.js";
     const char *UriWsh = "/wsh";
 
     std::vector<Httpd *> _httpdServers;
@@ -78,6 +77,55 @@ namespace esp32m {
       httpd->sessionClosed(sockfd);
       close(sockfd);
     }
+
+
+    bool uriMatcher(const char *reference_uri, const char *uri_to_match, size_t match_upto) {
+      logd("Checking for match between incoming uri: %s and reference uri: %s \n", uri_to_match, reference_uri);
+
+      bool isWsRequest = !strcmp(uri_to_match, UriWs);
+      bool isWshRequest = !strcmp(uri_to_match, UriWsh);
+
+      if (strcmp(reference_uri, UriWs)==0){
+        if (isWsRequest){
+          logd("Matched uri: %s, to ref: %s",uri_to_match, reference_uri);
+          return true;
+        }
+        return false;
+      }
+
+      if (strcmp(reference_uri, UriWsh)==0){
+        if (isWshRequest){
+          logd("Matched uri: %s, to ref: %s",uri_to_match, reference_uri);
+          return true;
+        }
+        return false;
+      }
+
+      // Check if the reference_uri  has two leading slashes
+      bool ref_double_slash = (reference_uri[0] == '/' && reference_uri[1] == '/');
+      
+      // Check if uri_to_match has "/" after te first char
+      bool uri_double_slash = false;
+      for (size_t i = 1; i < match_upto; i++) {
+          if (uri_to_match[i] == '/') {
+              uri_double_slash = true;
+              break;
+          }
+      }
+
+    // if template and uri are of the form /foo.bar, accept all uri
+      if (!(ref_double_slash) && !( uri_double_slash)) {
+        logd("Matched uri: %s, to ref: %s",uri_to_match, reference_uri);
+        return true;
+      }
+    // if template and uri are of the form /foo/bar, match to uri, ignoring first ref "/""
+      if (strcmp( uri_to_match, reference_uri+1) == 0) {
+        logd("Matched uri: %s, to ref: %s",uri_to_match, reference_uri);
+        return true;
+      } 
+      return false;
+    }
+
 
     esp_err_t wsHandler(httpd_req_t *req) {
       Httpd *httpd = nullptr;
@@ -164,7 +212,7 @@ namespace esp32m {
       _config = HTTPD_DEFAULT_CONFIG();
       _config.global_user_ctx = this;
       _config.global_user_ctx_free_fn = freeNop;
-      _config.uri_match_fn = httpd_uri_match_wildcard;
+      _config.uri_match_fn = uriMatcher; 
       _config.close_fn = closeFn;
       _config.lru_purge_enable = true;
       _config.max_uri_handlers = 16;
@@ -208,8 +256,6 @@ namespace esp32m {
         uh.handler = httpHandler;
         ESP_ERROR_CHECK_WITHOUT_ABORT(httpd_register_uri_handler(_server, &uh));
 
-        uh.uri = UriMainJS;
-        ESP_ERROR_CHECK_WITHOUT_ABORT(httpd_register_uri_handler(_server, &uh));
       }
     }
 
