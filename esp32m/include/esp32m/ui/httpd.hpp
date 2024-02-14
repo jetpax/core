@@ -13,6 +13,9 @@ namespace esp32m {
       virtual ~Httpd();
       const char *name() const override {
         return "ui-http";
+      }
+      httpd_handle_t* server() {
+        return &_server;  
       };
 
      protected:
@@ -21,13 +24,14 @@ namespace esp32m {
 
      private:
       httpd_config_t _config;
-      httpd_handle_t _server;
+      httpd_handle_t _server = nullptr;
       esp_err_t incomingReq(httpd_req_t *req);
       esp_err_t incomingWs(httpd_req_t *req);
       friend esp_err_t wsHandler(httpd_req_t *req);
       friend esp_err_t wsShellHandler(httpd_req_t *req);
       friend esp_err_t httpHandler(httpd_req_t *req);
       friend void closeFn(httpd_handle_t hd, int sockfd);
+      
     };
   }  // namespace ui
 }  // namespace esp32m

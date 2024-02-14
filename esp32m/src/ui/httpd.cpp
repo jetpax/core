@@ -13,9 +13,12 @@
 
 namespace esp32m {
   namespace ui {
+    
     const char *UriWs = "/ws";
-    const char *UriWsh = "/wsh";
     const char *UriRoot = "/";
+    const char *UriMainJS = "/main.js";
+    const char *UriWsh = "/wsh";
+
     std::vector<Httpd *> _httpdServers;
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
@@ -76,21 +79,6 @@ namespace esp32m {
       close(sockfd);
     }
 
-    bool uriMatcher(const char *reference_uri, const char *uri_to_match,
-                    size_t match_upto) {
-      bool isWsRequest = !strcmp(uri_to_match, UriWs);
-      bool isWshRequest = !strcmp(uri_to_match, UriWsh);
-      if (!strcmp(reference_uri, UriWs))
-        return isWsRequest;
-      if (!strcmp(reference_uri, UriWsh))
-        return isWshRequest;
-      if (!strcmp(reference_uri, UriRoot))
-        return !(isWsRequest || isWshRequest);
-      logw("no handler for: %s, match: %s, size: %d", reference_uri,
-           uri_to_match, match_upto);
-      return false;
-    }
-
     esp_err_t wsHandler(httpd_req_t *req) {
       Httpd *httpd = nullptr;
       for (Httpd *i : _httpdServers)
@@ -105,6 +93,7 @@ namespace esp32m {
       return httpd->incomingWs(req);
     }
 
+    // shell over ws  handler
     esp_err_t wsShellHandler(httpd_req_t *req) {
       Httpd *httpd = nullptr;
       for (Httpd *i : _httpdServers)
@@ -116,12 +105,12 @@ namespace esp32m {
         logw("no user_ctx: %s %d", req->uri, req->handle);
         return ESP_FAIL;
       }
-      if (req->method == HTTP_GET) {
+      if (req->method == HTTP_GET) {  // raise new shell connection event
         uint8_t codes[10];
-        Shell::instance();
-        logi("%d:shell opened", httpd_req_to_sockfd(req));
+        event::Shell::publish(req,"");
         return ESP_OK;
       }
+      // get new ws shell data
       httpd_ws_frame_t ws_pkt;
       memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
       ESP_CHECK_RETURN(httpd_ws_recv_frame(req, &ws_pkt, 0));
@@ -133,10 +122,10 @@ namespace esp32m {
       esp_err_t ret = ESP_ERROR_CHECK_WITHOUT_ABORT(
           httpd_ws_recv_frame(req, &ws_pkt, ws_pkt.len));
       if (ret == ESP_OK) {
-        // shell::Command ev(reinterpret_cast<char*>(ws_pkt.payload));
         switch (ws_pkt.type) {
           case HTTPD_WS_TYPE_TEXT:
-            event::Shell::publish(reinterpret_cast<char*>(ws_pkt.payload));
+            // publish new ws shell data
+            event::Shell::publish(req, reinterpret_cast<char*>(ws_pkt.payload));
             break;
           default:
             logi("WS packet type %d was not handled", ws_pkt.type);
@@ -175,9 +164,10 @@ namespace esp32m {
       _config = HTTPD_DEFAULT_CONFIG();
       _config.global_user_ctx = this;
       _config.global_user_ctx_free_fn = freeNop;
-      _config.uri_match_fn = uriMatcher;
+      _config.uri_match_fn = httpd_uri_match_wildcard;
       _config.close_fn = closeFn;
       _config.lru_purge_enable = true;
+      _config.max_uri_handlers = 16;
       // esp_log_level_set("httpd_ws", ESP_LOG_DEBUG);
       _httpdServers.push_back(this);
 
@@ -196,7 +186,7 @@ namespace esp32m {
       Transport::init(ui);
       if (ESP_ERROR_CHECK_WITHOUT_ABORT(httpd_start(&_server, &_config)) ==
           ESP_OK) {
-
+        logd("Started httpd server address  %p, handle %p", &_server, _server);        
         // Register WebSocket handler for the API
         httpd_uri_t uh = {.uri = UriWs,
                           .method = HTTP_GET,
@@ -216,6 +206,9 @@ namespace esp32m {
         uh.uri = UriRoot;
         uh.is_websocket = false;
         uh.handler = httpHandler;
+        ESP_ERROR_CHECK_WITHOUT_ABORT(httpd_register_uri_handler(_server, &uh));
+
+        uh.uri = UriMainJS;
         ESP_ERROR_CHECK_WITHOUT_ABORT(httpd_register_uri_handler(_server, &uh));
       }
     }
