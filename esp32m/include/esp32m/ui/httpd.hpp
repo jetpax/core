@@ -1,7 +1,6 @@
 #include <esp_http_server.h>
 #include "esp32m/ui/transport.hpp"
 
-#include "esp32m/events/shell.hpp"
 #include "esp32m/events.hpp"
 
 namespace esp32m {

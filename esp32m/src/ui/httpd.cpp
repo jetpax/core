@@ -16,7 +16,6 @@ namespace esp32m {
     
     const char *UriWs = "/ws";
     const char *UriRoot = "/";
-    const char *UriWsh = "/wsh";
 
     std::vector<Httpd *> _httpdServers;
 
@@ -79,35 +78,42 @@ namespace esp32m {
     }
 
 
-    bool uriMatcher(const char *reference_uri, const char *uri_to_match, size_t match_upto) {
-      logd("Checking for match between incoming uri: %s and reference uri: %s \n", uri_to_match, reference_uri);
+    //
+    // For each incoming uri request, esp_httpd calls this function repeatedly for each uri 
+    // registered by httpd_register_uri_handler.
+    // Returns true if the incoming uri matches the given registered uri (esp_httpd then 
+    // calls the handler for that registered uri).
+    // Returns false if no match found (esp_httpd then calls this function again with the 
+    // next registered uri)
+    //
+    // Except for /ws, which is matched separately to the websocket API interface UriWs, 
+    // all root level uris (eg /foo.bar) are matched to the root handler, UriRoot.
+    // If the uri is registered with a double leading slash, eg //shell/foo.bar the uri 
+    // is matched exactly (excluding the first slash), up to the match limit.
+    //
+    // This allows an application to register additional uri after esp32m has started 
+    // operating in their own 'name space'
+    //
 
-      bool isWsRequest = !strcmp(uri_to_match, UriWs);
-      bool isWshRequest = !strcmp(uri_to_match, UriWsh);
+    bool uriMatcher(const char *registered_uri, const char *incoming_uri, size_t match_upto) {
+      logd("Checking for match between incoming uri: %s and registered uri: %s \n", incoming_uri, registered_uri);
 
-      if (strcmp(reference_uri, UriWs)==0){
-        if (isWsRequest){
-          logd("Matched uri: %s, to ref: %s",uri_to_match, reference_uri);
+      // check for 
+      if (strcmp(registered_uri, UriWs)==0){
+        if (!strcmp(incoming_uri, UriWs)){
+          logd("Matched uri: %s, to ref: %s",incoming_uri, registered_uri);
           return true;
         }
         return false;
       }
 
-      if (strcmp(reference_uri, UriWsh)==0){
-        if (isWshRequest){
-          logd("Matched uri: %s, to ref: %s",uri_to_match, reference_uri);
-          return true;
-        }
-        return false;
-      }
-
-      // Check if the reference_uri  has two leading slashes
-      bool ref_double_slash = (reference_uri[0] == '/' && reference_uri[1] == '/');
+      // Check if the registered_uri has two leading slashes
+      bool ref_double_slash = (registered_uri[0] == '/' && registered_uri[1] == '/');
       
-      // Check if uri_to_match has "/" after te first char
+      // Check if incoming_uri has "/" after the first char
       bool uri_double_slash = false;
       for (size_t i = 1; i < match_upto; i++) {
-          if (uri_to_match[i] == '/') {
+          if (incoming_uri[i] == '/') {
               uri_double_slash = true;
               break;
           }
@@ -115,12 +121,12 @@ namespace esp32m {
 
     // if template and uri are of the form /foo.bar, accept all uri
       if (!(ref_double_slash) && !( uri_double_slash)) {
-        logd("Matched uri: %s, to ref: %s",uri_to_match, reference_uri);
+        logd("Matched uri: %s, to ref: %s",incoming_uri, registered_uri);
         return true;
       }
     // if template and uri are of the form /foo/bar, match to uri, ignoring first ref "/""
-      if (strcmp( uri_to_match, reference_uri+1) == 0) {
-        logd("Matched uri: %s, to ref: %s",uri_to_match, reference_uri);
+      if (strcmp( incoming_uri, registered_uri+1) == 0) {
+        logd("Matched uri: %s, to ref: %s",incoming_uri, registered_uri);
         return true;
       } 
       return false;
@@ -140,50 +146,7 @@ namespace esp32m {
       }
       return httpd->incomingWs(req);
     }
-
-    // shell over ws  handler
-    esp_err_t wsShellHandler(httpd_req_t *req) {
-      Httpd *httpd = nullptr;
-      for (Httpd *i : _httpdServers)
-        if (i->_server == req->handle) {
-          httpd = i;
-          break;
-        }
-      if (!httpd) {
-        logw("no user_ctx: %s %d", req->uri, req->handle);
-        return ESP_FAIL;
-      }
-      if (req->method == HTTP_GET) {  // raise new shell connection event
-        uint8_t codes[10];
-        event::Shell::publish(req,"");
-        return ESP_OK;
-      }
-      // get new ws shell data
-      httpd_ws_frame_t ws_pkt;
-      memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
-      ESP_CHECK_RETURN(httpd_ws_recv_frame(req, &ws_pkt, 0));
-
-      ws_pkt.payload = (uint8_t *)calloc(1, ws_pkt.len + 1);
-      if (!ws_pkt.payload)
-        return ESP_ERR_NO_MEM;
-
-      esp_err_t ret = ESP_ERROR_CHECK_WITHOUT_ABORT(
-          httpd_ws_recv_frame(req, &ws_pkt, ws_pkt.len));
-      if (ret == ESP_OK) {
-        switch (ws_pkt.type) {
-          case HTTPD_WS_TYPE_TEXT:
-            // publish new ws shell data
-            event::Shell::publish(req, reinterpret_cast<char*>(ws_pkt.payload));
-            break;
-          default:
-            logi("WS packet type %d was not handled", ws_pkt.type);
-            break;
-        }
-      }
-      free(ws_pkt.payload);
-      return ret;
-    }
-    
+   
     esp_err_t httpHandler(httpd_req_t *req) {
       Httpd *httpd = (Httpd *)req->user_ctx;
       if (!httpd) {
@@ -245,10 +208,6 @@ namespace esp32m {
                           .supported_subprotocol = 0};
         ESP_ERROR_CHECK_WITHOUT_ABORT(httpd_register_uri_handler(_server, &uh));
 
-        // Register WebSocket handler for the shell
-        uh.uri = UriWsh;
-        uh.handler = wsShellHandler;
-        ESP_ERROR_CHECK_WITHOUT_ABORT(httpd_register_uri_handler(_server, &uh));
 
         // Register HTTP handler for non-WebSocket requests
         uh.uri = UriRoot;
