@@ -12,7 +12,6 @@ CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 # must be enabled if web-ui is used
 CONFIG_HTTPD_WS_SUPPORT=y
 CONFIG_ESP32M_WS_API=y
-CONFIG_ESP32M_UI=y
 
 # modern browsers send too much stuff in headers
 CONFIG_HTTPD_MAX_REQ_HDR_LEN=2048
