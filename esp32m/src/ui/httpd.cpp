@@ -15,6 +15,8 @@ namespace esp32m {
   namespace ui {
     const char *UriWs = "/ws";
     const char *UriRoot = "/";
+    const char *UriApp = "/app/shell";
+
     std::vector<Httpd *> _httpdServers;
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
@@ -75,16 +77,56 @@ namespace esp32m {
       close(sockfd);
     }
 
-    bool uriMatcher(const char *reference_uri, const char *uri_to_match,
-                    size_t match_upto) {
-      bool isWsRequest = !strcmp(uri_to_match, UriWs);
-      if (!strcmp(reference_uri, UriWs))
-        return isWsRequest;
-      if (!strcmp(reference_uri, UriRoot))
-        return !isWsRequest;
-      logw("no handler for: %s, match: %s, size: %d", reference_uri,
-           uri_to_match, match_upto);
-      return false;
+
+    // For each incoming uri request, httpd calls uriMatcher repeatedly for each uri 
+    // that has been registered by httpd_register_uri_handler(): 
+    //
+    // uriMatcher checks for 
+    //  - uri == "/ws", which is matched to the esp32m websocket API interface UriWs, 
+    //  - uri starts with "/app", which allows an application to handle additional uris after esp32m has started).
+    // 
+    // All other uri are matched to the esp32m root handler, UriRoot, for handling by Httpd::incomingReq()
+    //
+    // Returns:
+    //    true if the incoming uri matches the given registered uri 
+    //      (httpd then calls the handler for that uri).
+    //    
+    //    false if no match found 
+    //      (httpd then calls this function again with the next registered uri, until all checked)
+    //
+
+    bool uriMatcher(const char *registered_uri, const char *incoming_uri, size_t match_upto) {
+      logd("Check registered uri: %s \n", registered_uri);
+
+      // check for /ws
+      if (strcmp(registered_uri, UriWs)==0){
+        if (!strcmp(incoming_uri, UriWs)){
+          logd("Matched /ws");
+          return true;
+        }
+        return false;
+      }
+
+       // default to root handler
+      if (strcmp(registered_uri, UriRoot)==0){
+        // if not app
+        if (strncmp(incoming_uri, UriApp, strlen(UriApp))){
+          logd("Matched system uri %s", incoming_uri);
+        return true;
+        }
+      }
+
+      // check for uris registered by app (uri begins with UriApp)
+      if (strncmp(registered_uri, UriApp, strlen(UriApp))==0){
+        // perform exact match up to limit
+        if (strcmp( incoming_uri, registered_uri) == 0) {
+          logd("Matched app uri: %s", incoming_uri);
+          return true;
+        }
+      }
+
+      // try next uri
+      return false;   
     }
 
     esp_err_t wsHandler(httpd_req_t *req) {
@@ -132,6 +174,7 @@ namespace esp32m {
       _config.uri_match_fn = uriMatcher;
       _config.close_fn = closeFn;
       _config.lru_purge_enable = true;
+      _config.max_uri_handlers = 20;
       // esp_log_level_set("httpd_ws", ESP_LOG_DEBUG);
       _httpdServers.push_back(this);
 
