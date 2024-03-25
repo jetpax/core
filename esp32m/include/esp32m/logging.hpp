@@ -9,15 +9,15 @@
 #include <esp32m/base.hpp>
 
 #define logE(format, ...) \
-  this->logger().logf(log::Level::Error, format, ##__VA_ARGS__)
+  this->logger().logf(::esp32m::log::Level::Error, format, ##__VA_ARGS__)
 #define logW(format, ...) \
-  this->logger().logf(log::Level::Warning, format, ##__VA_ARGS__)
+  this->logger().logf(::esp32m::log::Level::Warning, format, ##__VA_ARGS__)
 #define logI(format, ...) \
-  this->logger().logf(log::Level::Info, format, ##__VA_ARGS__)
+  this->logger().logf(::esp32m::log::Level::Info, format, ##__VA_ARGS__)
 #define logD(format, ...) \
-  this->logger().logf(log::Level::Debug, format, ##__VA_ARGS__)
+  this->logger().logf(::esp32m::log::Level::Debug, format, ##__VA_ARGS__)
 #define logV(format, ...) \
-  this->logger().logf(log::Level::Verbose, format, ##__VA_ARGS__)
+  this->logger().logf(::esp32m::log::Level::Verbose, format, ##__VA_ARGS__)
 
 #define LOGE(loggable, format, ...) \
   loggable->logger().logf(log::Level::Error, format, ##__VA_ARGS__)
