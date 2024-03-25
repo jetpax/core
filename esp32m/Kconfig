@@ -126,28 +126,23 @@ menu "ESP32 Manager configuration"
         default 0 if ESP32M_FS_ROOT_SPIFFS
         default 1 if ESP32M_FS_ROOT_LITTLEFS
 
-    
-    menu "UI Options"
+    choice ESP32M_UI_BUILD_MODE
+        bool "UI build mode"
+        default ESP32M_UI_BUILD_FULL
+        help
+            Specify default file system.
+        config ESP32M_UI_BUILD_FULL
+            bool "Perform full UI build every time"
+        config ESP32M_UI_BUILD_ONCE
+            bool "Build UI only once, don't re-build event if UI files change"
+        config ESP32M_UI_BUILD_NEVER
+            bool "Don't build UI, generate empty UI resources"
+    endchoice
 
-        config ESP32M_WS_API
-            bool "Include Websockets server API"
-            default y
-            help
-                Runs ESP32M API over websockets
+    config ESP32M_UI_BUILD_MODE
+        int
+        default 0 if ESP32M_UI_BUILD_FULL
+        default 1 if ESP32M_UI_BUILD_ONCE
+        default 2 if ESP32M_UI_BUILD_NEVER
         
-        config ESP32M_UI
-            bool "Include UI bundle in firmware"
-            depends on ESP32M_WS_API
-            default y
-            help
-                Select this option to include compiled javascript and HTML files in the build,
-                and serve the webapp UI from the device.
-
-                [ To serve the webapp from localhost:9000 (for example during development) 
-                unselect this option, and add the IP of your ESP32 in build/web-ui/webpack.config.js 
-                e.g.{ defines: { esp32m: { backend: { host: '192.168.4.1' } } } } 
-                and run  'yarn start' in build/webui ]
-        
-    endmenu # UI Options
-
 endmenu

@@ -5,14 +5,13 @@
 #include <esp_rom_uart.h>
 #include <esp_task_wdt.h>
 #include <esp_timer.h>
-#include <freertos/FreeRTOS.h>
 #include <freertos/ringbuf.h>
 #include <freertos/semphr.h>
-#include <freertos/task.h>
 #include <malloc.h>
 #include <rom/ets_sys.h>
 #include <string.h>
 #include <time.h>
+#include <mutex>
 #include <vector>
 
 #include "sdkconfig.h"
@@ -28,7 +27,8 @@ namespace esp32m {
 
     LogMessageFormatter _formatter = nullptr;
     std::vector<LogAppender *> _appenders;
-    SemaphoreHandle_t _loggingLock = xSemaphoreCreateMutex();
+    std::mutex _appendersLock;
+    std::mutex _loggingLock;
 
     const char DumpSubsitute = '.';
 
@@ -97,24 +97,35 @@ namespace esp32m {
       auto maxml = 65535 - (sizeof(LogMessage) + nl);
       if (ml > maxml)
         ml = maxml;
-      auto size = sizeof(LogMessage) + nl + ml;
+      const char *task = pcTaskGetName(xTaskGetCurrentTaskHandle());
+      size_t tl = (task ? strlen(task) : 0) + 1;
+      if (tl > 255)
+        tl = 255;
+      auto size = sizeof(LogMessage) + nl + ml + tl;
       void *pool = malloc(size);
-      return new (pool) LogMessage(size, level, stamp, name, nl, message, ml);
+      return new (pool)
+          LogMessage(size, level, stamp, task, tl, name, nl, message, ml);
     }
 
     LogMessage::LogMessage(uint16_t size, Level level, int64_t stamp,
-                           const char *name, uint8_t namelen,
-                           const char *message, uint16_t messagelen)
-        : _size(size), _level(level), _namelen(namelen), _stamp(stamp) {
+                           const char *task, uint8_t tasklen, const char *name,
+                           uint8_t namelen, const char *message,
+                           uint16_t messagelen)
+        : _stamp(stamp),
+          _size(size),
+          _level(level),
+          _namelen(namelen),
+          _tasklen(tasklen)
+    {
+      strlcpy((char *)this->task(), task, tasklen);
       strlcpy((char *)this->name(), name, namelen);
       strlcpy((char *)this->message(), message, messagelen);
     }
 
     Logger &Loggable::logger() {
       if (!_logger) {
-        xSemaphoreTake(_loggingLock, portMAX_DELAY);
+        std::lock_guard guard(_loggingLock);
         _logger = std::unique_ptr<Logger>(new Logger(*this));
-        xSemaphoreGive(_loggingLock);
       }
       if (_logger)
         return *_logger;
@@ -127,8 +138,8 @@ namespace esp32m {
      public:
       BufferedAppender(LogAppender &appender, size_t bufsize, bool autoRelease)
           : _appender(appender), _autoRelease(autoRelease) {
-        _lock = xSemaphoreCreateMutex();
         _handle = xRingbufferCreate(bufsize, RINGBUF_TYPE_NOSPLIT);
+        _maxItemSize = _handle ? xRingbufferGetMaxItemSize(_handle) : 0;
       }
       ~BufferedAppender() {
         release();
@@ -136,57 +147,66 @@ namespace esp32m {
 
      protected:
       bool append(const LogMessage *message) {
-        // can't use the buffer if it hasn't been created or if the task
+        auto messageSize = message ? message->size() : 0;
+        // this message can't be buffered if there's no buffer, or the size of
+        // the buffer is less than the size of the message, of if the task
         // scheduler is suspended
-        if (!_handle || xTaskGetSchedulerState() == taskSCHEDULER_SUSPENDED)
+        if (!_handle || _maxItemSize == 0 || _maxItemSize < messageSize ||
+            xTaskGetSchedulerState() == taskSCHEDULER_SUSPENDED)
           return _appender.append(message);
+        // null message means logger is asking whether this appender can append,
+        // we answer yes if the buffer of any size is allocated
+        if (!message)
+          return true;
         size_t size;
-        bool ok = true;
         LogMessage *item;
-        while (_appender.append(nullptr)) {
-          xSemaphoreTake(_lock, portMAX_DELAY);
-          item = (LogMessage *)xRingbufferReceive(_handle, &size, 0);
-          xSemaphoreGive(_lock);
-          if (!item)
+        // try to add this message to the buffer
+        for (;;) {
+          if (xRingbufferSend(_handle, message, messageSize, 0))
             break;
-          ok &= _appender.append(item);
+          // buffer is full, take the oldest item, and either append or lose
+          // it
+          item = (LogMessage *)xRingbufferReceive(_handle, &size, 0);
+          if (!item)
+            // this should be impossible, but still better to check so we don't
+            // try to call vRingbufferReturnItem() with null item
+            break;
+          _appender.append(
+              item);  // we don't care whether it succeeded or not at this
+                      // point, since there's no room in the buffer, so we're OK
+                      // with dropping the oldest item in case of failure
           vRingbufferReturnItem(_handle, item);
-          xSemaphoreGive(_lock);
+          item = nullptr;
+          // at this point some space has been freed in the buffer, so we try to
+          // add message to the buffer again
         }
-        if (!_appender.append(message))
-          for (;;) {
-            xSemaphoreTake(_lock, portMAX_DELAY);
-            if (xRingbufferSend(_handle, message, message->size(), 0)) {
-              xSemaphoreGive(_lock);
-              break;
-            }
-            item = (LogMessage *)xRingbufferReceive(_handle, &size, 0);
-            xSemaphoreGive(_lock);
-            if (!item)
-              break;
-            ok &= _appender.append(item);
-            xSemaphoreTake(_lock, portMAX_DELAY);
-            vRingbufferReturnItem(_handle, item);
-            xSemaphoreGive(_lock);
+        // the buffer is consistent FIFO at this point, and we try to push as
+        // many messages to the actual appender as possible
+        for (;;) {
+          item = (LogMessage *)xRingbufferReceive(_handle, &size, 0);
+          if (!item) {
+            // the buffer is empty
+            if (_autoRelease)
+              release();
+            return true;
           }
-        if (ok && _autoRelease)
-          release();
-        return true;
+          if (!_appender.append(item))
+            // appender is not ready, we keep item in the buffer for later
+            return true;
+          vRingbufferReturnItem(_handle, item);
+        }
       }
 
      private:
       LogAppender &_appender;
       bool _autoRelease;
       RingbufHandle_t _handle;
-      SemaphoreHandle_t _lock;
+      size_t _maxItemSize;
       void release() {
         if (!_handle)
           return;
-        xSemaphoreTake(_lock, portMAX_DELAY);
         vRingbufferDelete(_handle);
-        xSemaphoreGive(_lock);
         _handle = nullptr;
-        vSemaphoreDelete(_lock);
       }
     };
 
@@ -196,31 +216,22 @@ namespace esp32m {
     class LogQueue {
      public:
       LogQueue(size_t bufsize) : _bufsize(bufsize) {
-        _lock = xSemaphoreCreateMutex();
         _buf = xRingbufferCreate(bufsize, RINGBUF_TYPE_NOSPLIT);
         xTaskCreate([](void *self) { ((LogQueue *)self)->run(); }, "m/logq",
                     4096, this, tskIDLE_PRIORITY, &_task);
         logQueue = this;
       }
       ~LogQueue() {
-        xSemaphoreTake(_lock, portMAX_DELAY);
         vTaskDelete(_task);
         vRingbufferDelete(_buf);
         logQueue = nullptr;
-        xSemaphoreGive(_lock);
-        vSemaphoreDelete(_lock);
       }
       bool enqueue(const LogMessage *message) {
-        xSemaphoreTake(_lock, portMAX_DELAY);
-        auto result =
-            xRingbufferSend(_buf, message, message->size(), pdMS_TO_TICKS(10));
-        xSemaphoreGive(_lock);
-        return result;
+        return xRingbufferSend(_buf, message, message->size(), 0);
       }
 
      private:
       size_t _bufsize;
-      SemaphoreHandle_t _lock;
       RingbufHandle_t _buf;
       TaskHandle_t _task = nullptr;
       void run() {
@@ -228,10 +239,14 @@ namespace esp32m {
         for (;;) {
           esp_task_wdt_reset();
           size_t size;
-          LogMessage *item =
+          LogMessage *item;
+          item =
               (LogMessage *)xRingbufferReceive(_buf, &size, pdMS_TO_TICKS(100));
           if (item) {
-            for (auto appender : _appenders) appender->append(item);
+            {
+              std::lock_guard guard(_appendersLock);
+              for (auto appender : _appenders) appender->append(item);
+            }
             vRingbufferReturnItem(_buf, item);
           }
         }
@@ -259,6 +274,10 @@ namespace esp32m {
       char *buf = nullptr;
       auto level = msg->level();
       auto name = msg->name();
+      auto namelen = msg->namelen();
+      auto taskname = msg->task();
+      auto tasknamelen = msg->tasklen();
+      auto messagelen = msg->messagelen();
       char l = level >= 0 && level <= 6 ? levels[level] : '?';
       if (stamp < 0) {
         stamp = -stamp;
@@ -267,12 +286,13 @@ namespace esp32m {
         struct tm timeinfo;
         gmtime_r(&now, &timeinfo);
         strftime(strftime_buf, sizeof(strftime_buf), "%F %T", &timeinfo);
-        buf = (char *)malloc(strlen(strftime_buf) + 1 /*dot*/ + 3 /*millis*/ +
-                             1 /*space*/ + 1 /*level*/ + 1 /*space*/ +
-                             strlen(name) + 2 /*spaces*/ + msg->message_size() +
-                             1 /*zero*/);
-        sprintf(buf, "%s.%03d %c %s  %s", strftime_buf, (int)(stamp % 1000), l,
-                name, msg->message());
+        auto buflen = strlen(strftime_buf) + 1 /*dot*/ + 3 /*millis*/ +
+                      1 /*space*/ + 1 /*level*/ + 1 /*space*/ + 1 /*lbracket*/ +
+                      tasknamelen + 2 /*rbracket space*/ + namelen +
+                      2 /*spaces*/ + messagelen + 1 /*zero*/;
+        buf = (char *)malloc(buflen);
+        snprintf(buf, buflen, "%s.%03d %c [%s] %s  %s", strftime_buf,
+                 (int)(stamp % 1000), l, taskname, name, msg->message());
       } else {
         int millis = stamp % 1000;
         stamp /= 1000;
@@ -282,13 +302,16 @@ namespace esp32m {
         stamp /= 60;
         int hours = stamp % 24;
         int days = stamp / 24;
-        buf = (char *)malloc(
-            6 /*days*/ + 1 /*colon*/ + 2 /*hours*/ + 1 /*colon*/ +
-            2 /*minutes*/ + 1 /*colon*/ + 2 /*seconds*/ + 1 /*colon*/ +
-            3 /*millis*/ + 1 /*space*/ + 1 /*level*/ + 1 /*space*/ +
-            strlen(name) + 2 /*spaces*/ + msg->message_size() + 1 /*zero*/);
-        sprintf(buf, "%d:%02d:%02d:%02d.%03d %c %s  %s", days, hours, minutes,
-                seconds, millis, l, name, msg->message());
+        auto buflen = 6 /*days*/ + 1 /*colon*/ + 2 /*hours*/ + 1 /*colon*/ +
+                      2 /*minutes*/ + 1 /*colon*/ + 2 /*seconds*/ +
+                      1 /*colon*/ + 3 /*millis*/ + 1 /*space*/ + 1 /*level*/ +
+                      1 /*space*/ + 1 /*lbracket*/ + tasknamelen +
+                      2 /*rbracket space*/ + namelen + 2 /*spaces*/ +
+                      messagelen + 1 /*zero*/;
+        buf = (char *)malloc(buflen);
+        snprintf(buf, buflen, "%d:%02d:%02d:%02d.%03d %c [%s] %s  %s", days,
+                 hours, minutes, seconds, millis, l, taskname, name,
+                 msg->message());
       }
       return buf;
     }
@@ -332,7 +355,12 @@ namespace esp32m {
       LogMessage *message = LogMessage::alloc(level, timeOrUptime(), name, msg);
       if (!message)
         return;
-      if (!_appenders.size()) {
+      bool noAppenders;
+      {
+        std::lock_guard guard(_appendersLock);
+        noAppenders = _appenders.size() == 0;
+      }
+      if (noAppenders) {
         auto m = formatter()(message);
         if (m) {
           ets_printf(m);
@@ -346,7 +374,10 @@ namespace esp32m {
         if (queue && xTaskGetSchedulerState() != taskSCHEDULER_SUSPENDED)
           enqueued = queue->enqueue(message);
         if (!enqueued) {
-          for (auto appender : _appenders) appender->append(message);
+          std::lock_guard guard(_appendersLock);
+          for (auto appender : _appenders) {
+            appender->append(message);
+          }
         }
       }
       free(message);
@@ -399,6 +430,7 @@ namespace esp32m {
     void addAppender(LogAppender *a) {
       if (!a)
         return;
+      std::lock_guard guard(_appendersLock);
       for (auto appender : _appenders)
         if (appender == a)
           return;
@@ -428,12 +460,14 @@ namespace esp32m {
     }
 
     bool hasAppenders() {
+      std::lock_guard guard(_appendersLock);
       return _appenders.size() != 0;
     }
 
     void removeAppender(LogAppender *a) {
       if (!a)
         return;
+      std::lock_guard guard(_appendersLock);
       _appenders.erase(std::remove(_appenders.begin(), _appenders.end(), a),
                        _appenders.end());
     }
@@ -572,20 +606,17 @@ namespace esp32m {
     class SerialHook {
      public:
       SerialHook(size_t bufsize) {
-        _lock = xSemaphoreCreateMutex();
         _serialBuf = (char *)malloc(_serialBufLen = bufsize);
         serialHook = this;
         ets_install_putc1(hook);
       }
       ~SerialHook() {
         ets_install_uart_printf();
-        xSemaphoreTake(_lock, portMAX_DELAY);
+        std::lock_guard guard(_lock);
         free(_serialBuf);
         _serialBufLen = 0;
         _serialBufPtr = 0;
         serialHook = nullptr;
-        xSemaphoreGive(_lock);
-        vSemaphoreDelete(_lock);
       }
 
      private:
@@ -606,7 +637,7 @@ namespace esp32m {
         // https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/system/freertos.html
         bool suspended = xTaskGetSchedulerState() == taskSCHEDULER_SUSPENDED;
         if (!suspended)
-          xSemaphoreTake(_lock, portMAX_DELAY);
+          _lock.lock();
         auto b = _serialBuf;
         auto bl = _serialBufLen;
         if (b && bl) {
@@ -616,22 +647,22 @@ namespace esp32m {
             const char **mptr = (const char **)&b;
             auto level = detectLevel(mptr);
             if (!suspended)
-              xSemaphoreGive(_lock);
+              _lock.unlock();
             ets_install_uart_printf();
             system().log(level, *mptr);
             ets_install_putc1(hook);
             if (!suspended)
-              xSemaphoreTake(_lock, portMAX_DELAY);
+              _lock.lock();
           }
           if (c != '\n' && c != '\r')
             b[_serialBufPtr++] = c;
         }
         if (!suspended)
-          xSemaphoreGive(_lock);
+          _lock.unlock();
         _recursion--;
       }
 
-      SemaphoreHandle_t _lock;
+      std::mutex _lock;
       char *_serialBuf;
       size_t _serialBufLen;
       int _serialBufPtr = 0;

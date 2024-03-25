@@ -46,20 +46,6 @@ namespace esp32m {
 
     const uint8_t SyslogSeverity[] = {5, 5, 3, 4, 6, 7, 7};
 
-    bool getDefaultGwAddress(uint32_t &addr) {
-      esp_netif_t *dif = esp_netif_get_default_netif();
-      if (!dif)
-        return false;
-      if (!esp_netif_is_netif_up(dif))
-        return false;
-      esp_netif_ip_info_t info;
-      auto err = esp_netif_get_ip_info(dif, &info);
-      if (err != ERR_OK)
-        return false;
-      addr = info.gw.addr;
-      return true;
-    }
-
     bool Udp::append(const LogMessage *message) {
       if (!_enabled)
         return true;
@@ -85,8 +71,11 @@ namespace esp32m {
                sizeof(_addr.sin_addr));
         freeaddrinfo(res);
       }
-      if (!_addr.sin_addr.s_addr)
-        getDefaultGwAddress(_addr.sin_addr.s_addr);
+      if (!_addr.sin_addr.s_addr) {
+        esp_ip4_addr_t gw;
+        if (net::getDefaultGateway(&gw))
+          _addr.sin_addr.s_addr = gw.addr;
+      }
       if (!_addr.sin_addr.s_addr)
         return false;
       if (!message)
@@ -147,18 +136,19 @@ namespace esp32m {
                     1 /* Z */ + 1 /* SP */ + strlen(hostname) + 1 /* SP */ +
                     strlen(name) + 1 /* SP */ + 1 + /* PROCID */ +1 /*SP*/ + 1 +
                     /* MSGID */ +1 /* SP */ + 1 +
-                    /* STRUCTURED-DATA */ +1 /* SP */ +
-                    message->message_size() + 1 /*NULL*/;
+                    /* STRUCTURED-DATA */ +1 /* SP */ + message->messagelen() +
+                    1 /*NULL*/;
           char *buf = (char *)malloc(ms);
           if (!buf)
             return true;
-          sprintf(buf, "<%d>1 %s.%04dZ %s %s - - - %s", pri, strftime_buf,
-                  (int)(stamp % 1000), hostname, name, message->message());
+          snprintf(buf, ms, "<%d>1 %s.%04dZ %s %s - - - %s", pri, strftime_buf,
+                   (int)(stamp % 1000), hostname, name, message->message());
           auto result = sendto(_fd, buf, strlen(buf), 0,
                                (struct sockaddr *)&_addr, sizeof(_addr));
           if (result == EMSGSIZE) {
-            sprintf(buf, "<%d>1 %s.%04dZ %s %s - - - %s", pri, strftime_buf,
-                    (int)(stamp % 1000), hostname, name, "message too long!");
+            snprintf(buf, ms, "<%d>1 %s.%04dZ %s %s - - - %s", pri,
+                     strftime_buf, (int)(stamp % 1000), hostname, name,
+                     "message too long!");
             result = sendto(_fd, buf, strlen(buf), 0, (struct sockaddr *)&_addr,
                             sizeof(_addr));
           }

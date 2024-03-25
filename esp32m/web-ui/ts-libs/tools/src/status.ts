@@ -5,6 +5,7 @@ import {
   Subject,
   Subscription,
 } from 'rxjs';
+import { TEnum } from './enum';
 
 type TStatusChangedCallback<T> = (
   state: DiscreteStatus<T>,
@@ -35,6 +36,13 @@ export class DiscreteStatus<T> {
     this._value = value;
     (this.changed as Subject<T>).next(prev);
   }
+  toString(map?: TEnum) {
+    return map?.[this._value as string] || this._value;
+  }
+  /**
+   * @summary Waits for specific status, then calls the provided callback and resolves the returned promise.
+   * If status matches at the time of the call, callback is called and promise is resoved immediately.
+   **/
   when(value: T | T[], cb?: TStatusChangedCallback<T>): Promise<T | void> {
     const tester = Array.isArray(value)
       ? () => this.any(...value)
@@ -61,6 +69,14 @@ export class DiscreteStatus<T> {
       : () => this.is(value);
     if (now && tester()) cb(this, this._prev);
     return this.changed.pipe(filter(tester)).subscribe((v) => cb(this, v));
+  }
+  /**
+   * @summary Invokes provided callback immediately with the current status, and then every time the status changes.
+   * @returns subscription
+   */
+  pass(cb: TStatusChangedCallback<T>) {
+    cb(this);
+    return this.changed.subscribe((v) => cb(this, v));
   }
   private _value: T;
   private _prev?: T;
