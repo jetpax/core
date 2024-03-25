@@ -12,6 +12,9 @@ namespace esp32m {
       const char *name() const override {
         return "ui-http";
       };
+      httpd_handle_t* server() {
+        return &_server;  
+      };
 
      protected:
       void init(Ui *ui) override;
