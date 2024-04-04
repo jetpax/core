@@ -15,7 +15,7 @@ namespace esp32m {
   namespace ui {
     const char *UriWs = "/ws";
     const char *UriRoot = "/";
-    const char *UriApp = "/app/shell";
+    const char *UriApp = "/app";
 
     std::vector<Httpd *> _httpdServers;
 
@@ -71,12 +71,17 @@ namespace esp32m {
 
     void freeNop(void *ctx){};
 
-    void closeFn(httpd_handle_t hd, int sockfd) {
-      Httpd *httpd = (Httpd *)httpd_get_global_user_ctx(hd);
-      httpd->sessionClosed(sockfd);
+    // Add linger to mitigate "“Unable to create TCP socket: errno 23”
+    // see https://docs.espressif.com/projects/espressif-esp-faq/en/latest/software-framework/protocols/lwip.html#after-creating-and-closing-tcp-socket-several-times-an-error-is-reported-as-unable-to-create-tcp-socket-errno-23-how-to-resolve-such-issue
+    
+    void closeFn(httpd_handle_t hd, int sockfd)
+    {
+      struct linger so_linger;
+      so_linger.l_onoff = true;
+      so_linger.l_linger = 0;
+      setsockopt(sockfd, SOL_SOCKET, SO_LINGER, &so_linger, sizeof(so_linger));
       close(sockfd);
     }
-
 
     // For each incoming uri request, httpd calls uriMatcher repeatedly for each uri 
     // that has been registered by httpd_register_uri_handler(): 
@@ -96,12 +101,12 @@ namespace esp32m {
     //
 
     bool uriMatcher(const char *registered_uri, const char *incoming_uri, size_t match_upto) {
-      logd("Check registered uri: %s \n", registered_uri);
+      logi("Check registered uri: %s \n", registered_uri);
 
       // check for /ws
       if (strcmp(registered_uri, UriWs)==0){
         if (!strcmp(incoming_uri, UriWs)){
-          logd("Matched /ws");
+          logi("Matched /ws");
           return true;
         }
         return false;
@@ -111,7 +116,7 @@ namespace esp32m {
       if (strcmp(registered_uri, UriRoot)==0){
         // if not app
         if (strncmp(incoming_uri, UriApp, strlen(UriApp))){
-          logd("Matched system uri %s", incoming_uri);
+          logi("Matched system uri %s", incoming_uri);
         return true;
         }
       }
@@ -120,7 +125,7 @@ namespace esp32m {
       if (strncmp(registered_uri, UriApp, strlen(UriApp))==0){
         // perform exact match up to limit
         if (strcmp( incoming_uri, registered_uri) == 0) {
-          logd("Matched app uri: %s", incoming_uri);
+          logi("Matched app uri: %s", incoming_uri);
           return true;
         }
       }
