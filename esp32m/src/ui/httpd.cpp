@@ -101,12 +101,12 @@ namespace esp32m {
     //
 
     bool uriMatcher(const char *registered_uri, const char *incoming_uri, size_t match_upto) {
-      logi("Check registered uri: %s \n", registered_uri);
+      logd("Check registered uri: %s \n", registered_uri);
 
       // check for /ws
       if (strcmp(registered_uri, UriWs)==0){
         if (!strcmp(incoming_uri, UriWs)){
-          logi("Matched /ws");
+          logd("Matched /ws");
           return true;
         }
         return false;
@@ -116,7 +116,7 @@ namespace esp32m {
       if (strcmp(registered_uri, UriRoot)==0){
         // if not app
         if (strncmp(incoming_uri, UriApp, strlen(UriApp))){
-          logi("Matched system uri %s", incoming_uri);
+          logd("Matched system uri %s", incoming_uri);
         return true;
         }
       }
@@ -125,7 +125,7 @@ namespace esp32m {
       if (strncmp(registered_uri, UriApp, strlen(UriApp))==0){
         // perform exact match up to limit
         if (strcmp( incoming_uri, registered_uri) == 0) {
-          logi("Matched app uri: %s", incoming_uri);
+          logd("Matched app uri: %s", incoming_uri);
           return true;
         }
       }
